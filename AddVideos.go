@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -38,8 +37,7 @@ func AddVideos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// パラメーターの取得
-	channelIDs := strings.Split(r.URL.Query().Get("channel_id"), ",")
-	date := r.URL.Query().Get("targe_date")
+	date := r.URL.Query().Get("target_date")
 	paramLayout := "2006-01-02"
 
 	// Start making YouTube API calls.
@@ -53,7 +51,9 @@ func AddVideos(w http.ResponseWriter, r *http.Request) {
 	end := tommrow.Format(layout)
 
 	db := connectDB(dsn)
+	channelIDs := []Channel{}
 	tmpVideos := []Video{}
+	db.Find(&channelIDs)
 	db.Find(&tmpVideos)
 	tmpIDs := make([]string, len(tmpVideos))
 	for _, tmpVideo := range tmpVideos {
@@ -62,7 +62,7 @@ func AddVideos(w http.ResponseWriter, r *http.Request) {
 	tx := db.Begin()
 
 	for _, channelID := range channelIDs {
-		activityCall := service.Activities.List("contentDetails").ChannelId(channelID).PublishedAfter(start).PublishedBefore(end)
+		activityCall := service.Activities.List("contentDetails").ChannelId(channelID.ChannelID).PublishedAfter(start).PublishedBefore(end)
 		activitiesResponse, err := activityCall.Do()
 		if err != nil {
 			// The channels.list method call returned an error.
