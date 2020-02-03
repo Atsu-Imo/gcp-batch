@@ -2,6 +2,7 @@ package youtube
 
 import (
 	"context"
+	"sync"
 	"flag"
 	"fmt"
 	"log"
@@ -51,6 +52,7 @@ func AddVideos(w http.ResponseWriter, r *http.Request) {
 	end := tommrow.Format(layout)
 
 	db := connectDB(dsn)
+	defer db.Close()
 	channelIDs := []Channel{}
 	tmpVideos := []Video{}
 	db.Find(&channelIDs)
@@ -61,43 +63,49 @@ func AddVideos(w http.ResponseWriter, r *http.Request) {
 	}
 	tx := db.Begin()
 
+	wg := sync.WaitGroup{}
 	for _, channelID := range channelIDs {
-		activityCall := service.Activities.List("contentDetails").ChannelId(channelID.ChannelID).PublishedAfter(start).PublishedBefore(end)
-		activitiesResponse, err := activityCall.Do()
-		if err != nil {
-			// The channels.list method call returned an error.
-			log.Fatalf("Error making API call to list activities: %v", err.Error())
-		}
-
-		for _, activity := range activitiesResponse.Items {
-			uploaded := activity.ContentDetails.Upload
-			if uploaded == nil {
-				continue
-			}
-			videoID := activity.ContentDetails.Upload.VideoId
-			videoCall := service.Videos.List("snippet, contentDetails").Id(videoID)
-			videoResponce, err := videoCall.Do()
+		wg.Add(1)
+		go func(channelID Channel) {
+			defer wg.Done()
+			activityCall := service.Activities.List("contentDetails").ChannelId(channelID.ChannelID).PublishedAfter(start).PublishedBefore(end)
+			activitiesResponse, err := activityCall.Do()
 			if err != nil {
-				log.Fatalf("Error making API call to video: %v", err.Error())
+				// The channels.list method call returned an error.
+				log.Fatalf("Error making API call to list activities: %v", err.Error())
 			}
-			videoSnippet := videoResponce.Items[0].Snippet
-			videoDetails := videoResponce.Items[0].ContentDetails
-			video := NewVideo(videoID, videoSnippet, videoDetails)
-			for _, IDs := range tmpIDs {
-				if video == nil {
+	
+			for _, activity := range activitiesResponse.Items {
+				uploaded := activity.ContentDetails.Upload
+				if uploaded == nil {
 					continue
 				}
-				if IDs == video.VideoID {
-					video = nil
+				videoID := activity.ContentDetails.Upload.VideoId
+				videoCall := service.Videos.List("snippet, contentDetails").Id(videoID)
+				videoResponce, err := videoCall.Do()
+				if err != nil {
+					log.Fatalf("Error making API call to video: %v", err.Error())
+				}
+				videoSnippet := videoResponce.Items[0].Snippet
+				videoDetails := videoResponce.Items[0].ContentDetails
+				video := NewVideo(videoID, videoSnippet, videoDetails)
+				for _, IDs := range tmpIDs {
+					if video == nil {
+						continue
+					}
+					if IDs == video.VideoID {
+						video = nil
+					}
+				}
+	
+				// insert into DB
+				if video != nil {
+					db.Debug().Create(&video)
 				}
 			}
-
-			// insert into DB
-			if video != nil {
-				db.Debug().Create(&video)
-			}
-		}
+		}(channelID)
 	}
+	wg.Wait()
 	tx.Commit()
 	w.Write([]byte("OK"))
 }
